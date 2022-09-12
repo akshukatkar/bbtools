@@ -1,0 +1,21 @@
+id: open-redirect
+
+info:
+  name:  Open Redirect
+  author: Open redirect
+  severity: medium
+  description: 
+  reference:
+    - https://wpscan.com/vulnerability/97823f41-7614-420e-81b8-9e735e4c203f
+  tags: redirect
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+
+    matchers:
+      - type: regex
+        regex:
+          - '(?m)^(?:Location\s*?:\s*?)(?:https?://|//)(?:[a-zA-Z0-9\-_\.@]*)bugcrowd\.sh.*$'
+        part: header
