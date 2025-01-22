@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/ecdsa"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/csv"
@@ -28,22 +30,22 @@ var (
 		x509.SHA384WithRSAPSS:  "RSAPSS-SHA384",
 		x509.SHA512WithRSAPSS:  "RSAPSS-SHA512",
 	}
-	ports        []string
-	workerCount  int
-	timeout      time.Duration
-	retries      int
-	batchSize    int
+	portStr     string
+	workerCount int
+	timeout     time.Duration
+	retries     int
+	batchSize   int
 )
 
 func main() {
-	flag.StringVar((*string)(&ports), "ports", "443,8443,465,993,995,22", "Comma-separated list of ports")
+	flag.StringVar(&portStr, "ports", "443,8443,465,993,995,22", "Comma-separated list of ports")
 	flag.IntVar(&workerCount, "workers", 1000, "Concurrent workers")
 	flag.DurationVar(&timeout, "timeout", 5*time.Second, "Connection timeout")
 	flag.IntVar(&retries, "retries", 1, "Connection retries")
 	flag.IntVar(&batchSize, "batch", 10000, "Batch buffer size")
 	flag.Parse()
 
-	portList := strings.Split(ports, ",")
+	portList := strings.Split(portStr, ",")
 	ipChan := make(chan string, batchSize)
 	resultChan := make(chan []string, batchSize)
 
@@ -54,10 +56,11 @@ func main() {
 	var wg sync.WaitGroup
 	for _, port := range portList {
 		wg.Add(1)
-		go func(p string) {
+		p := strings.TrimSpace(port)
+		go func(port string) {
 			defer wg.Done()
-			startPortWorkers(ipChan, resultChan, p)
-		}(strings.TrimSpace(p))
+			startPortWorkers(ipChan, resultChan, port)
+		}(p)
 	}
 
 	// Feed IPs from stdin
@@ -73,18 +76,18 @@ func main() {
 
 func startPortWorkers(ipChan <-chan string, resultChan chan<- []string, port string) {
 	var wg sync.WaitGroup
-	workerPool := make(chan struct{}, workerCount/len(ports))
+	workerPool := make(chan struct{}, workerCount/len(portList))
 
 	for ip := range ipChan {
 		workerPool <- struct{}{}
 		wg.Add(1)
-		
+
 		go func(ip, port string) {
 			defer func() {
 				<-workerPool
 				wg.Done()
 			}()
-			
+
 			processIPPort(ip, port, resultChan)
 		}(ip, port)
 	}
@@ -123,7 +126,7 @@ func processIPPort(ip, port string, resultChan chan<- []string) {
 
 		req, _ := http.NewRequestWithContext(ctx, "GET", "https://"+target, nil)
 		resp, err := client.Do(req)
-		
+
 		if err == nil {
 			defer resp.Body.Close()
 			if resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
@@ -180,7 +183,7 @@ func formatResult(ip, port string, cert *x509.Certificate, tlsVersion string) []
 	switch pub := cert.PublicKey.(type) {
 	case *rsa.PublicKey:
 		if pub.Size() < 256 { // 2048 bits
-			insecureReasons = append(insecureReasons, 
+			insecureReasons = append(insecureReasons,
 				fmt.Sprintf("weak_rsa_key:%d_bits", pub.Size()*8))
 		}
 	case *ecdsa.PublicKey:
@@ -221,10 +224,10 @@ func formatResult(ip, port string, cert *x509.Certificate, tlsVersion string) []
 func writeResults(results <-chan []string) {
 	w := csv.NewWriter(os.Stdout)
 	defer w.Flush()
-	
+
 	// Write header
 	w.Write([]string{"ip", "port", "domains", "expiry", "issuer", "insecure", "tls_version"})
-	
+
 	for record := range results {
 		w.Write(record)
 		w.Flush()
