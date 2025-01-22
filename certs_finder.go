@@ -46,6 +46,12 @@ func main() {
 	flag.Parse()
 
 	portList := strings.Split(portStr, ",")
+	numPorts := len(portList)
+	workersPerPort := workerCount / numPorts
+	if workersPerPort < 1 {
+		workersPerPort = 1
+	}
+
 	ipChan := make(chan string, batchSize)
 	resultChan := make(chan []string, batchSize)
 
@@ -57,10 +63,10 @@ func main() {
 	for _, port := range portList {
 		wg.Add(1)
 		p := strings.TrimSpace(port)
-		go func(port string) {
+		go func(port string, workers int) {
 			defer wg.Done()
-			startPortWorkers(ipChan, resultChan, port)
-		}(p)
+			startPortWorkers(ipChan, resultChan, port, workers)
+		}(p, workersPerPort)
 	}
 
 	// Feed IPs from stdin
@@ -73,6 +79,30 @@ func main() {
 	wg.Wait()
 	close(resultChan)
 }
+
+// Added workersPerPort parameter to startPortWorkers
+func startPortWorkers(ipChan <-chan string, resultChan chan<- []string, port string, workersPerPort int) {
+	var wg sync.WaitGroup
+	workerPool := make(chan struct{}, workersPerPort) // Use the passed workersPerPort
+
+	for ip := range ipChan {
+		workerPool <- struct{}{}
+		wg.Add(1)
+
+		go func(ip, port string) {
+			defer func() {
+				<-workerPool
+				wg.Done()
+			}()
+
+			processIPPort(ip, port, resultChan)
+		}(ip, port)
+	}
+
+	wg.Wait()
+}
+
+// Rest of the functions (processIPPort, tlsVersionToString, formatResult, writeResults) remain unchanged
 
 func startPortWorkers(ipChan <-chan string, resultChan chan<- []string, port string) {
 	var wg sync.WaitGroup
